@@ -8,10 +8,13 @@
 
 import zipfile
 from html.parser import HTMLParser
+from urllib.parse import urlsplit
 
-from flask import render_template_string, url_for
+from flask import redirect, render_template_string, url_for
 from invenio_db import db
 from invenio_files_rest.models import ObjectVersion
+from invenio_files_rest.storage import PyFSFileStorage
+from invenio_files_rest.views import ObjectResource
 from mock import patch
 from six import BytesIO, b
 
@@ -437,18 +440,76 @@ def preview_policies(testapp, record, filename, content):
         return parser.policies
 
 
+def preview_directives(testapp, record, filename, content):
+    """Preview a file and return the directives of its Content-Security-Policy."""
+    policies = preview_policies(testapp, record, filename, content)
+    assert len(policies) == 1
+    return dict(directive.strip().split(" ", 1) for directive in policies[0].split(";"))
+
+
 def test_preview_content_security_policy(testapp, webassets, record):
     """Test that previews forbid inline scripts and javascript: URLs."""
-    policies = preview_policies(testapp, record, "test.md", b"# Title")
-    assert len(policies) == 1
-    directives = dict(
-        directive.strip().split(" ", 1) for directive in policies[0].split(";")
-    )
+    directives = preview_directives(testapp, record, "test.md", b"# Title")
     assert directives["script-src"] == "'self'"
     assert directives["object-src"] == "'none'"
+    # files can only be loaded from the same origin by default
+    assert directives["connect-src"] == "'self'"
+    assert directives["media-src"] == "'self' blob:"
+
+
+def test_preview_content_security_policy_file_sources(testapp, webassets, record):
+    """Test that files can be loaded from other origins, e.g. S3 storages."""
+    sources = {"PREVIEWER_FILE_SOURCES": ["https://s3.example.org"]}
+    with patch.dict(testapp.config, sources):
+        directives = preview_directives(testapp, record, "test.pdf", b"Content")
+    assert directives["connect-src"] == "'self' https://s3.example.org"
+    assert directives["media-src"] == "'self' blob: https://s3.example.org"
+    assert directives["script-src"] == "'self'"
+    assert directives["default-src"] == "'self'"
+
+
+def test_preview_content_security_policy_redirect(testapp, webassets, record):
+    """Test that the policy allows files redirected to another origin.
+
+    Storages such as S3 serve files with a redirect to a presigned URL, and
+    browsers check the redirect target against the preview's policy.
+    """
+    s3_url = "https://s3.example.org/bucket/data?X-Amz-Signature=x"
+    send_file = patch.object(
+        PyFSFileStorage, "send_file", return_value=redirect(s3_url)
+    )
+    # permissions are not under test (and need invenio-access)
+    check_permission = patch.object(ObjectResource, "check_object_permission")
+    with send_file, check_permission:
+        directives = preview_directives(testapp, record, "test.pdf", b"Content")
+        with testapp.test_client() as client:
+            res = client.get(f"/record/{record['control_number']}/files/test.pdf")
+        assert res.status_code == 302
+        target = urlsplit(res.headers["Location"])
+        origin = f"{target.scheme}://{target.netloc}"
+        assert origin not in directives["connect-src"].split()
+
+        with patch.dict(testapp.config, {"PREVIEWER_FILE_SOURCES": [origin]}):
+            directives = preview_directives(testapp, record, "test.pdf", b"Content")
+        assert origin in directives["connect-src"].split()
+        assert origin in directives["media-src"].split()
+
+
+def test_preview_content_security_policy_pdf_scripting(testapp, webassets, record):
+    """Test that PDF scripting allows WebAssembly, used by its sandbox."""
+    directives = preview_directives(testapp, record, "test.pdf", b"Content")
+    assert directives["script-src"] == "'self'"
+
+    with patch.dict(testapp.config, {"PREVIEWER_PDF_JS_ENABLE_SCRIPTING": True}):
+        directives = preview_directives(testapp, record, "test.pdf", b"Content")
+    assert directives["script-src"] == "'self' 'wasm-unsafe-eval'"
 
 
 def test_preview_content_security_policy_disabled(testapp, webassets, record):
     """Test that the previews policy can be disabled."""
-    with patch.dict(testapp.config, {"PREVIEWER_CONTENT_SECURITY_POLICY": None}):
+    config = {
+        "PREVIEWER_CONTENT_SECURITY_POLICY": None,
+        "PREVIEWER_FILE_SOURCES": ["https://s3.example.org"],
+    }
+    with patch.dict(testapp.config, config):
         assert preview_policies(testapp, record, "test.md", b"# Title") == []

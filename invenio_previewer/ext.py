@@ -96,14 +96,31 @@ class _InvenioPreviewerState(object):
 
     @property
     def content_security_policy(self):
-        """Returnt he Content-Security-Policy of previwes as a string."""
-        policy = self.app.config.get("PREVIEWER_CONTENT_SECURITY_POLICY") or {}
-        directives = []
-        for name, sources in policy.items():
-            if isinstance(sources, list):
-                sources = " ".join(sources)
-            directives.append(f"{name} {sources}".strip())
-        return "; ".join(directives)
+        """Return the Content-Security-Policy of previews as a string."""
+        config = self.app.config
+        policy = {
+            name: sources.split() if isinstance(sources, str) else list(sources)
+            for name, sources in (
+                config.get("PREVIEWER_CONTENT_SECURITY_POLICY") or {}
+            ).items()
+        }
+        if not policy:
+            return ""
+
+        # files redirected to another origin, e.g. presigned S3 URLs, are
+        # fetched by pdf.js/csv/geojson and loaded by the audio/video players
+        file_sources = config.get("PREVIEWER_FILE_SOURCES") or []
+        if file_sources:
+            for name in ("connect-src", "media-src"):
+                policy.setdefault(name, ["'self'"]).extend(file_sources)
+
+        # pdf.js runs the scripts of PDF files in a WebAssembly sandbox
+        if config.get("PREVIEWER_PDF_JS_ENABLE_SCRIPTING"):
+            policy.setdefault("script-src", ["'self'"]).append("'wasm-unsafe-eval'")
+
+        return "; ".join(
+            f"{name} {' '.join(sources)}".strip() for name, sources in policy.items()
+        )
 
     def register_previewer(self, name, previewer):
         """Register a previewer in the system."""

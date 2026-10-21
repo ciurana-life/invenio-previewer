@@ -38,15 +38,30 @@ PREVIEWER_CONTENT_SECURITY_POLICY = {
     # map tiles load them from other hosts
     "img-src": ["*", "data:", "blob:"],
     "font-src": ["'self'", "data:"],
+    "connect-src": ["'self'"],
     "media-src": ["'self'", "blob:"],
     "worker-src": ["'self'", "blob:"],
     "object-src": ["'none'"],
     "base-uri": ["'none'"],
     "form-action": ["'self'"],
 }
-"""Content-Security-Policy applied to file previws.
+"""Content-Security-Policy applied to file previews.
 
-`script-src` does not allow `unsafie-inline` nor `unsafe-eval`.
+`script-src` does not allow `unsafe-inline` nor `unsafe-eval`. Set it to ``None``
+to disable the policy.
+"""
+
+PREVIEWER_FILE_SOURCES = []
+"""Origins the browser may load file content from in previews.
+
+Needed when file downloads redirect to another origin, e.g. to the presigned URLs
+of an S3 storage. Use the origin (scheme, host and port) of the redirect, e.g.
+``["https://my-bucket.s3.eu-west-1.amazonaws.com"]``.
+
+The origins are only added to ``connect-src`` and ``media-src`` of the previews'
+Content-Security-Policy: files from them can be fetched and played, but never
+run as scripts. Prefer the exact host of your bucket over wildcards such as
+``https://*.s3.amazonaws.com``, which allow any bucket.
 """
 
 PREVIEWER_PDF_JS_ENABLE_SCRIPTING = False

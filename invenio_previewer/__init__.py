@@ -271,6 +271,28 @@ must allow images to load from OSM servers. For example:
               "https://tile.openstreetmap.org",
           ]
 
+Files served from another origin (S3)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Previews have their own Content-Security-Policy
+(:py:data:`invenio_previewer.config.PREVIEWER_CONTENT_SECURITY_POLICY`), which
+only allows loading files from the same origin. When file downloads redirect
+to another origin, as S3 storages do with presigned URLs, the PDF, CSV,
+GeoJSON, audio and video previewers cannot load them. Allow the origin of the
+redirect with :py:data:`invenio_previewer.config.PREVIEWER_FILE_SOURCES`:
+
+  .. code-block:: python
+
+    PREVIEWER_FILE_SOURCES = ["https://my-bucket.s3.eu-west-1.amazonaws.com"]
+
+To find the origin, request a file download and take the scheme, host and port
+of the ``Location`` header of the redirect, without the path.
+
+The origins are only allowed for fetching files (``connect-src``) and for audio
+and video (``media-src``), never for scripts. The storage must also allow
+cross-origin ``GET`` requests (CORS) for the PDF, CSV and GeoJSON previewers,
+e.g. with ``invenio s3 create-bucket`` of Invenio-S3.
+
 Override default previewer
 --------------------------
 
